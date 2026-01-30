@@ -33,6 +33,8 @@ pub struct Editor {
     pub status_message: Option<String>,
     /// Pending two-key or replace action in normal mode (gg, dd, r)
     pub pending_normal: PendingNormal,
+    /// Last search pattern for n/N repeat
+    pub last_search_pattern: Option<String>,
 }
 
 impl Editor {
@@ -56,6 +58,7 @@ impl Editor {
             command_buffer: String::new(),
             status_message: None,
             pending_normal: PendingNormal::None,
+            last_search_pattern: None,
         }
     }
 
@@ -354,6 +357,107 @@ impl Editor {
     pub fn enter_command_mode(&mut self) {
         self.mode = Mode::Command;
         self.command_buffer.clear();
+    }
+
+    /// Enter search mode (vim /)
+    pub fn enter_search_mode(&mut self) {
+        self.mode = Mode::Search;
+        self.command_buffer.clear();
+    }
+
+    /// Run forward search from current cursor; move to match and save pattern. Returns true if found.
+    pub fn search_forward(&mut self) -> bool {
+        if self.command_buffer.is_empty() {
+            self.set_status("No pattern");
+            return false;
+        }
+        if let Some((line, col)) = self.buffer.find_forward(
+            self.cursor.line,
+            self.cursor.col,
+            self.command_buffer.as_str(),
+            true,
+        ) {
+            self.cursor.line = line;
+            self.cursor.col = col;
+            self.clamp_cursor_col();
+            self.adjust_viewport();
+            self.last_search_pattern = Some(self.command_buffer.clone());
+            true
+        } else {
+            self.set_status("Pattern not found");
+            false
+        }
+    }
+
+    /// Run backward search from current cursor; move to match and save pattern. Returns true if found.
+    #[allow(dead_code)]
+    pub fn search_backward(&mut self) -> bool {
+        if self.command_buffer.is_empty() {
+            self.set_status("No pattern");
+            return false;
+        }
+        if let Some((line, col)) = self.buffer.find_backward(
+            self.cursor.line,
+            self.cursor.col,
+            self.command_buffer.as_str(),
+            true,
+        ) {
+            self.cursor.line = line;
+            self.cursor.col = col;
+            self.clamp_cursor_col();
+            self.adjust_viewport();
+            self.last_search_pattern = Some(self.command_buffer.clone());
+            true
+        } else {
+            self.set_status("Pattern not found");
+            false
+        }
+    }
+
+    /// Repeat last search forward (vim n)
+    pub fn repeat_search_forward(&mut self) -> bool {
+        let pattern = match self.last_search_pattern.as_deref() {
+            Some(p) if !p.is_empty() => p,
+            _ => {
+                self.set_status("No previous search");
+                return false;
+            }
+        };
+        if let Some((line, col)) =
+            self.buffer.find_forward(self.cursor.line, self.cursor.col, pattern, true)
+        {
+            self.cursor.line = line;
+            self.cursor.col = col;
+            self.clamp_cursor_col();
+            self.adjust_viewport();
+            true
+        } else {
+            self.set_status("Pattern not found");
+            false
+        }
+    }
+
+    /// Repeat last search backward (vim N)
+    pub fn repeat_search_backward(&mut self) -> bool {
+        let pattern = match self.last_search_pattern.as_deref() {
+            Some(p) if !p.is_empty() => p,
+            _ => {
+                self.set_status("No previous search");
+                return false;
+            }
+        };
+        if let Some((line, col)) =
+            self.buffer.find_backward(self.cursor.line, self.cursor.col, pattern, true)
+        {
+            self.cursor.line = line;
+            self.cursor.col = col;
+            self.clamp_cursor_col();
+            self.adjust_viewport();
+            true
+        } else {
+            self.set_status("Pattern not found");
+            false
+        }
     }
 
     /// Insert a character at the cursor position

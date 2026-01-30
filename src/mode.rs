@@ -7,6 +7,8 @@ pub enum Mode {
     Insert,
     /// Command mode - for entering commands (after pressing :)
     Command,
+    /// Search mode - for searching in buffer
+    Search,
 }
 
 impl Mode {
@@ -16,6 +18,7 @@ impl Mode {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
             Mode::Command => "COMMAND",
+            Mode::Search => "SEARCH",
         }
     }
 }

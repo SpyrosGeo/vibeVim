@@ -107,6 +107,7 @@ fn render_status_bar(frame: &mut Frame, editor: &Editor, area: Rect) {
         Mode::Normal => Style::default().bg(Color::Blue).fg(Color::White),
         Mode::Insert => Style::default().bg(Color::Green).fg(Color::Black),
         Mode::Command => Style::default().bg(Color::Yellow).fg(Color::Black),
+        Mode::Search => Style::default().bg(Color::Magenta).fg(Color::White),
     };
 
     let filename = editor
@@ -150,6 +151,7 @@ fn render_status_bar(frame: &mut Frame, editor: &Editor, area: Rect) {
 fn render_command_line(frame: &mut Frame, editor: &Editor, area: Rect) {
     let content = match editor.mode {
         Mode::Command => format!(":{}", editor.command_buffer),
+        Mode::Search => format!("/{}", editor.command_buffer),
         _ => editor
             .status_message
             .clone()
@@ -162,9 +164,10 @@ fn render_command_line(frame: &mut Frame, editor: &Editor, area: Rect) {
 
 /// Position the cursor in the frame
 fn position_cursor(frame: &mut Frame, editor: &Editor, text_area: Rect) {
-    // In command mode, cursor is in the command line
-    if editor.mode == Mode::Command {
-        let x = 1 + editor.command_buffer.len() as u16; // +1 for the ':'
+    // In command or search mode, cursor is in the command line
+    if editor.mode == Mode::Command || editor.mode == Mode::Search {
+        let prefix_len = 1; // ':' or '/'
+        let x = prefix_len + editor.command_buffer.len() as u16;
         let y = frame.area().height - 1; // Last line
         frame.set_cursor_position((x, y));
         return;
