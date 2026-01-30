@@ -17,6 +17,7 @@ pub fn handle_key_event(editor: &mut Editor, key: KeyEvent) -> InputResult {
         Mode::Normal => handle_normal_mode(editor, key),
         Mode::Insert => handle_insert_mode(editor, key),
         Mode::Command => handle_command_mode(editor, key),
+        Mode::Search => handle_search_mode(editor, key),
     }
 }
 
@@ -100,6 +101,15 @@ fn handle_normal_mode(editor: &mut Editor, key: KeyEvent) -> InputResult {
 
         // Enter command mode
         KeyCode::Char(':') => editor.enter_command_mode(),
+        KeyCode::Char('/') => editor.enter_search_mode(),
+
+        // Search repeat
+        KeyCode::Char('n') => {
+            editor.repeat_search_forward();
+        }
+        KeyCode::Char('N') => {
+            editor.repeat_search_backward();
+        }
 
         // Ctrl+C will set the mode to normal_mode 
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -149,6 +159,27 @@ fn handle_insert_mode(editor: &mut Editor, key: KeyEvent) -> InputResult {
         _ => {}
     }
 
+    InputResult::Continue
+}
+
+/// Handle key events in search mode (vim /)
+fn handle_search_mode(editor: &mut Editor, key: KeyEvent) -> InputResult {
+    match key.code {
+        KeyCode::Esc => return return_to_normal_mode(editor),
+        KeyCode::Enter => {
+            editor.search_forward();
+            editor.command_buffer.clear();
+            editor.enter_normal_mode();
+        }
+        KeyCode::Backspace => {
+            if editor.command_buffer.is_empty() {
+                return return_to_normal_mode(editor);
+            }
+            editor.command_buffer.pop();
+        }
+        KeyCode::Char(c) => editor.command_buffer.push(c),
+        _ => {}
+    }
     InputResult::Continue
 }
 
