@@ -38,4 +38,10 @@ impl DirectoryState {
     pub fn file_explorer_mut(&mut self) -> &mut FileExplorer {
         &mut self.file_explorer
     }
+
+    /// Re-read the current directory (e.g. after external file changes).
+    pub fn refresh(&mut self) -> io::Result<()> {
+        let cwd = self.file_explorer.cwd().clone();
+        self.file_explorer.set_cwd(cwd)
+    }
 }

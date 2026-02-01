@@ -75,9 +75,23 @@ impl Editor {
         &mut self.buffers[self.current_buf]
     }
 
-    /// Open a file into a new buffer and switch to it
+    /// Open a file into a new buffer and switch to it. If the file is already open, switches to that buffer.
     pub fn open_file_into_new_buffer(&mut self, path: &str) -> Result<(), std::io::Error> {
-        let buffer = Buffer::from_file(path)?;
+        let normalized = Buffer::normalize_path(path);
+        if let Some((idx, _)) = self
+            .buffers
+            .iter()
+            .enumerate()
+            .find(|(_, b)| b.file_path.as_ref().map(|p| p == &normalized).unwrap_or(false))
+        {
+            self.current_buf = idx;
+            self.cursor = Cursor::default();
+            self.viewport_offset = 0;
+            self.clamp_cursor_to_buffer();
+            return Ok(());
+        }
+        let path_str = normalized.to_string_lossy().into_owned();
+        let buffer = Buffer::from_file(&path_str)?;
         self.buffers.push(buffer);
         self.current_buf = self.buffers.len() - 1;
         self.cursor = Cursor::default();

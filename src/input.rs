@@ -46,25 +46,42 @@ pub fn handle_key_event(app: &mut App, key: KeyEvent) -> InputResult {
     }
 
     if app.focus_on_explorer {
+        // R or F5: refresh the file list
+        if matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::F(5)) {
+            if let Some(ref mut dir) = app.directory_state {
+                match dir.refresh() {
+                    Ok(()) => app.editor.set_status("Explorer refreshed"),
+                    Err(e) => app.editor.set_status(&format!("{}", e)),
+                }
+            }
+            return InputResult::Continue;
+        }
         let is_enter = matches!(key.code, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right);
         if is_enter {
-            let path_to_open = app.directory_state.as_ref().and_then(|dir| {
+            if let Some(ref dir) = app.directory_state {
                 let current = dir.file_explorer().current();
                 let path = current.path();
                 if path.is_file() {
-                    path.to_str().map(|s| s.to_string())
-                } else {
-                    None
+                    match path.to_str() {
+                        Some(s) => {
+                            let path_str = s.to_string();
+                            match app.editor.open_file_into_new_buffer(&path_str) {
+                                Ok(()) => {
+                                    app.focus_on_explorer = false;
+                                    app.editor.set_status(&format!("Opened {}", path_str));
+                                }
+                                Err(e) => {
+                                    app.editor.set_status(&format!("{}", e));
+                                }
+                            }
+                            return InputResult::Continue;
+                        }
+                        None => {
+                            app.editor.set_status("Path is not valid UTF-8");
+                            return InputResult::Continue;
+                        }
+                    }
                 }
-            });
-            if let Some(path_str) = path_to_open {
-                if app.editor.open_file_into_new_buffer(&path_str).is_ok() {
-                    app.focus_on_explorer = false;
-                    app.editor.set_status(&format!("Opened {}", path_str));
-                } else {
-                    app.editor.set_status("Failed to open file");
-                }
-                return InputResult::Continue;
             }
         }
         if let Some(ref mut dir) = app.directory_state {

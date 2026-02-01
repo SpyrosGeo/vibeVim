@@ -82,8 +82,15 @@ impl App {
         if self.directory_state.is_some() {
             self.toggle_sidebar();
         } else {
-            match std::env::current_dir() {
-                Ok(cwd) => {
+            let dir_to_open = self
+                .editor
+                .current_buffer()
+                .file_path
+                .as_ref()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                .or_else(|| std::env::current_dir().ok());
+            match dir_to_open {
+                Some(cwd) => {
                     match DirectoryState::new(&cwd) {
                         Ok(dir) => {
                             self.directory_state = Some(dir);
@@ -91,12 +98,12 @@ impl App {
                             self.focus_on_explorer = true;
                             self.editor.set_status("Opened current directory");
                         }
-                        Err(_) => {
-                            self.editor.set_status("Failed to open current directory");
+                        Err(e) => {
+                            self.editor.set_status(&format!("{}", e));
                         }
                     }
                 }
-                Err(_) => {
+                None => {
                     self.editor.set_status("No current directory");
                 }
             }

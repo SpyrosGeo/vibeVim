@@ -23,15 +23,21 @@ impl Buffer {
         }
     }
 
+    /// Returns a normalized path (canonical when the path exists, else the path as given).
+    pub fn normalize_path(path: &str) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+    }
+
     /// Load a buffer from a file
     pub fn from_file(path: &str) -> Result<Self, IoError> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let text = Rope::from_reader(reader)?;
+        let file_path = Some(Self::normalize_path(path));
 
         Ok(Self {
             text,
-            file_path: Some(PathBuf::from(path)),
+            file_path,
             modified: false,
         })
     }
