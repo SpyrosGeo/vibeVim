@@ -1,0 +1,19 @@
+{
+  "global": {
+    "toggle_sidebar": ["Space e"],
+    "focus_explorer_toggle": ["Ctrl+w w"],
+    "enter_command_mode": [":"]
+  },
+  "explorer": {
+    "refresh": ["r", "R", "F5"],
+    "open_enter": ["Enter", "l", "Right"]
+  },
+  "normal": {
+    "move_left": ["h", "Left"],
+    "move_down": ["j", "Down"],
+    "move_up": ["k", "Up"],
+    "move_right": ["l", "Right"],
+    "enter_insert_mode": ["i"],
+    "enter_command_mode": [":"]
+  }
+}
