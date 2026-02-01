@@ -1,5 +1,8 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
+use ratatui_explorer::Input as ExplorerInput;
+
+use crate::app::App;
 use crate::editor::{Editor, EditorCommand, PendingNormal};
 use crate::mode::Mode;
 
@@ -11,12 +14,88 @@ pub enum InputResult {
     Exit,
 }
 
-/// Handle a key event based on the current mode
-pub fn handle_key_event(editor: &mut Editor, key: KeyEvent) -> InputResult {
+/// Handle a key event; dispatches to file explorer or editor based on focus.
+pub fn handle_key_event(app: &mut App, key: KeyEvent) -> InputResult {
+    // Space then E (in normal mode): toggle sidebar visibility or open current directory
+    if app.pending_space_e {
+        app.pending_space_e = false;
+        if matches!(key.code, KeyCode::Char('e') | KeyCode::Char('E'))
+            && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            && app.editor.mode == Mode::Normal
+        {
+            app.toggle_sidebar_or_open_current_dir();
+            return InputResult::Continue;
+        }
+    }
+
+    // Ctrl+w: start window-switch sequence
+    if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.pending_ctrl_w = true;
+        return InputResult::Continue;
+    }
+
+    // Second key after Ctrl+w: w toggles focus
+    if app.pending_ctrl_w {
+        app.pending_ctrl_w = false;
+        if key.code == KeyCode::Char('w') && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+            if app.directory_state.is_some() {
+                app.focus_on_explorer = !app.focus_on_explorer;
+            }
+            return InputResult::Continue;
+        }
+    }
+
+    if app.focus_on_explorer {
+        let is_enter = matches!(key.code, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right);
+        if is_enter {
+            let path_to_open = app.directory_state.as_ref().and_then(|dir| {
+                let current = dir.file_explorer().current();
+                let path = current.path();
+                if path.is_file() {
+                    path.to_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            });
+            if let Some(path_str) = path_to_open {
+                if app.editor.open_file_into_new_buffer(&path_str).is_ok() {
+                    app.focus_on_explorer = false;
+                    app.editor.set_status(&format!("Opened {}", path_str));
+                } else {
+                    app.editor.set_status("Failed to open file");
+                }
+                return InputResult::Continue;
+            }
+        }
+        if let Some(ref mut dir) = app.directory_state {
+            let event = Event::Key(key);
+            let input = ExplorerInput::from(&event);
+            if let Err(e) = dir.file_explorer_mut().handle(input) {
+                app.editor.set_status(&format!("{}", e));
+            }
+        }
+        return InputResult::Continue;
+    }
+
+    // In normal mode with editor focus, Space starts the "Space then E" shortcut
+    if !app.focus_on_explorer
+        && app.editor.mode == Mode::Normal
+        && key.code == KeyCode::Char(' ')
+    {
+        app.pending_space_e = true;
+        return InputResult::Continue;
+    }
+
+    handle_editor(app, key)
+}
+
+/// Handle key event for the editor (when focus is on the editor pane).
+fn handle_editor(app: &mut App, key: KeyEvent) -> InputResult {
+    let editor = &mut app.editor;
     match editor.mode {
         Mode::Normal => handle_normal_mode(editor, key),
         Mode::Insert => handle_insert_mode(editor, key),
-        Mode::Command => handle_command_mode(editor, key),
+        Mode::Command => handle_command_mode(app, key),
         Mode::Search => handle_search_mode(editor, key),
     }
 }
@@ -184,19 +263,37 @@ fn handle_search_mode(editor: &mut Editor, key: KeyEvent) -> InputResult {
 }
 
 /// Handle key events in command mode
-fn handle_command_mode(editor: &mut Editor, key: KeyEvent) -> InputResult {
+fn handle_command_mode(app: &mut App, key: KeyEvent) -> InputResult {
     match key.code {
         // Cancel command
         KeyCode::Esc => {
-           return return_to_normal_mode(editor);
+           return return_to_normal_mode(&mut app.editor);
         }
 
         // Execute command
         KeyCode::Enter => {
-            if let Some(cmd) = editor.execute_command() {
-                match cmd {
+            let (is_toggle_sidebar, cmd_result) = {
+                let editor = &mut app.editor;
+                let cmd = editor.command_buffer.trim();
+                let is_toggle = cmd == "e." || cmd == "Explore" || cmd == "Lexplore";
+                if is_toggle {
+                    editor.command_buffer.clear();
+                    editor.mode = Mode::Normal;
+                    (true, None)
+                } else {
+                    let result = editor.execute_command();
+                    (false, result)
+                }
+            };
+            if is_toggle_sidebar {
+                app.toggle_sidebar_or_open_current_dir();
+                return InputResult::Continue;
+            }
+            if let Some(cmd_result) = cmd_result {
+                let editor = &mut app.editor;
+                match cmd_result {
                     EditorCommand::Quit => {
-                        if editor.buffer.modified {
+                        if editor.current_buffer().modified {
                             editor.set_status("No write since last change (add ! to override)");
                             return InputResult::Continue;
                         }
@@ -211,6 +308,7 @@ fn handle_command_mode(editor: &mut Editor, key: KeyEvent) -> InputResult {
 
         // Backspace in command buffer
         KeyCode::Backspace => {
+            let editor = &mut app.editor;
             if editor.command_buffer.is_empty() {
                 editor.mode = Mode::Normal;
             } else {
@@ -220,7 +318,7 @@ fn handle_command_mode(editor: &mut Editor, key: KeyEvent) -> InputResult {
 
         // Add character to command buffer
         KeyCode::Char(c) => {
-            editor.command_buffer.push(c);
+            app.editor.command_buffer.push(c);
         }
 
         _ => {}

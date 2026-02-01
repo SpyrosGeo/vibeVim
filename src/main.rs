@@ -1,5 +1,6 @@
 mod app;
 mod buffer;
+mod dir;
 mod editor;
 mod input;
 mod mode;
@@ -33,15 +34,43 @@ fn main() -> io::Result<()> {
     // Create the application
     let args: Vec<String> = std::env::args().collect();
     let mut app = if args.len() > 1 {
-        match App::with_file(&args[1]) {
-            Ok(app) => app,
-            Err(_) => {
-                // If file doesn't exist, create new buffer with that filename
-                let mut app = App::new();
-                app.editor.buffer.file_path = Some(std::path::PathBuf::from(&args[1]));
-                app.editor.set_status(&format!("New file: {}", &args[1]));
-                app
+        let path_arg = &args[1];
+        let (path_opt, path_error) = if path_arg == "." {
+            match std::env::current_dir() {
+                Ok(p) => (Some(p), None),
+                Err(e) => (None, Some(e)),
             }
+        } else {
+            (Some(std::path::PathBuf::from(path_arg)), None)
+        };
+
+        if let Some(path) = path_opt {
+            if path.is_dir() {
+                match App::with_directory(&path) {
+                    Ok(app) => app,
+                    Err(e) => {
+                        let mut app = App::new();
+                        app.editor.set_status(&format!("Cannot open directory: {}", e));
+                        app
+                    }
+                }
+            } else {
+                match App::with_file(path_arg) {
+                    Ok(app) => app,
+                    Err(_) => {
+                        let mut app = App::new();
+                        app.editor.current_buffer_mut().file_path =
+                            Some(std::path::PathBuf::from(path_arg));
+                        app.editor.set_status(&format!("New file: {}", path_arg));
+                        app
+                    }
+                }
+            }
+        } else {
+            let mut app = App::new();
+            app.editor
+                .set_status(&format!("Cannot resolve path: {}", path_error.unwrap()));
+            app
         }
     } else {
         App::new()

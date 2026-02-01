@@ -19,8 +19,10 @@ pub struct Cursor {
 
 /// The main editor state
 pub struct Editor {
-    /// The text buffer being edited
-    pub buffer: Buffer,
+    /// All open buffers
+    pub buffers: Vec<Buffer>,
+    /// Index of the current buffer in `buffers`
+    pub current_buf: usize,
     /// Current cursor position
     pub cursor: Cursor,
     /// Current editing mode
@@ -51,7 +53,8 @@ impl Editor {
     /// Build an editor from a buffer with default state (cursor, mode, viewport, etc.)
     fn from_buffer(buffer: Buffer) -> Self {
         Self {
-            buffer,
+            buffers: vec![buffer],
+            current_buf: 0,
             cursor: Cursor::default(),
             mode: Mode::default(),
             viewport_offset: 0,
@@ -59,6 +62,59 @@ impl Editor {
             status_message: None,
             pending_normal: PendingNormal::None,
             last_search_pattern: None,
+        }
+    }
+
+    /// Reference to the current buffer
+    pub fn current_buffer(&self) -> &Buffer {
+        &self.buffers[self.current_buf]
+    }
+
+    /// Mutable reference to the current buffer
+    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
+        &mut self.buffers[self.current_buf]
+    }
+
+    /// Open a file into a new buffer and switch to it
+    pub fn open_file_into_new_buffer(&mut self, path: &str) -> Result<(), std::io::Error> {
+        let buffer = Buffer::from_file(path)?;
+        self.buffers.push(buffer);
+        self.current_buf = self.buffers.len() - 1;
+        self.cursor = Cursor::default();
+        self.viewport_offset = 0;
+        Ok(())
+    }
+
+    /// Switch to next buffer (wrap around)
+    pub fn next_buf(&mut self) {
+        if self.buffers.len() <= 1 {
+            return;
+        }
+        self.current_buf = (self.current_buf + 1) % self.buffers.len();
+        self.clamp_cursor_to_buffer();
+        self.viewport_offset = 0;
+    }
+
+    /// Switch to previous buffer (wrap around)
+    pub fn prev_buf(&mut self) {
+        if self.buffers.len() <= 1 {
+            return;
+        }
+        self.current_buf = self.current_buf.checked_sub(1).unwrap_or(self.buffers.len() - 1);
+        self.clamp_cursor_to_buffer();
+        self.viewport_offset = 0;
+    }
+
+    /// Clamp cursor to valid range for current buffer
+    fn clamp_cursor_to_buffer(&mut self) {
+        let buf = self.current_buffer();
+        let line_count = buf.line_count();
+        if line_count == 0 {
+            self.cursor.line = 0;
+            self.cursor.col = 0;
+        } else {
+            self.cursor.line = self.cursor.line.min(line_count - 1);
+            self.clamp_cursor_col();
         }
     }
 
@@ -93,7 +149,7 @@ impl Editor {
 
     /// Move cursor down
     pub fn move_down(&mut self) {
-        if self.cursor.line < self.buffer.line_count().saturating_sub(1) {
+        if self.cursor.line < self.current_buffer().line_count().saturating_sub(1) {
             self.cursor.line += 1;
             self.clamp_cursor_col();
             self.adjust_viewport();
@@ -124,7 +180,7 @@ impl Editor {
                 col += 1;
             }
 
-            if col >= chars.len() && self.cursor.line < self.buffer.line_count() - 1 {
+            if col >= chars.len() && self.cursor.line < self.current_buffer().line_count() - 1 {
                 // Move to next line
                 self.cursor.line += 1;
                 self.cursor.col = 0;
@@ -175,7 +231,7 @@ impl Editor {
 
     /// Move cursor to last line of buffer (vim G)
     pub fn move_to_last_line(&mut self) {
-        let line_count = self.buffer.line_count();
+        let line_count = self.current_buffer().line_count();
         if line_count > 0 {
             self.cursor.line = line_count.saturating_sub(1);
             self.clamp_cursor_col();
@@ -205,11 +261,11 @@ impl Editor {
             }
             let end_col = col.saturating_sub(1);
 
-            if col >= chars.len() && self.cursor.line < self.buffer.line_count().saturating_sub(1) {
+            if col >= chars.len() && self.cursor.line < self.current_buffer().line_count().saturating_sub(1) {
                 // Past end of line; go to next line and find end of first word
                 self.cursor.line += 1;
                 self.adjust_viewport();
-                if let Some(next_line) = self.buffer.line(self.cursor.line) {
+                if let Some(next_line) = self.current_buffer().line(self.cursor.line) {
                     let next_chars: Vec<char> = next_line.chars().collect();
                     let mut c = 0;
                     while c < next_chars.len() && next_chars[c].is_whitespace() {
@@ -230,11 +286,11 @@ impl Editor {
 
     /// True if line is empty or only whitespace (vim "blank" for paragraph motion)
     fn is_line_blank(&self, line_idx: usize) -> bool {
-        let len = self.buffer.line_len(line_idx);
+        let len = self.current_buffer().line_len(line_idx);
         if len == 0 {
             return true;
         }
-        if let Some(line) = self.buffer.line(line_idx) {
+        if let Some(line) = self.current_buffer().line(line_idx) {
             line.chars().all(|c| c.is_whitespace())
         } else {
             true
@@ -255,7 +311,7 @@ impl Editor {
 
     /// Move cursor to next blank line / start of next paragraph (vim })
     pub fn move_paragraph_next(&mut self) {
-        let line_count = self.buffer.line_count();
+        let line_count = self.current_buffer().line_count();
         let mut line = self.cursor.line + 1;
         while line < line_count && !self.is_line_blank(line) {
             line += 1;
@@ -268,7 +324,7 @@ impl Editor {
 
     /// Maximum valid column for a line in the current mode (Insert: end of line; Normal: last char)
     fn max_col_for_line(&self, line: usize) -> usize {
-        let line_len = self.buffer.line_len(line);
+        let line_len = self.current_buffer().line_len(line);
         if self.mode == Mode::Insert {
             line_len
         } else {
@@ -278,7 +334,7 @@ impl Editor {
 
     /// Current line as Vec<char> for motion logic (may include newline)
     fn current_line_chars(&self) -> Option<Vec<char>> {
-        self.buffer
+        self.current_buffer()
             .line(self.cursor.line)
             .map(|line| line.chars().collect())
     }
@@ -318,7 +374,7 @@ impl Editor {
     /// Enter insert mode at end of line
     pub fn enter_insert_mode_end(&mut self) {
         self.mode = Mode::Insert;
-        self.cursor.col = self.buffer.line_len(self.cursor.line);
+        self.cursor.col = self.current_buffer().line_len(self.cursor.line);
     }
 
     /// Enter insert mode at start of line
@@ -329,8 +385,9 @@ impl Editor {
 
     /// Open a new line below current line and enter insert mode (vim o)
     pub fn open_line_below(&mut self) {
-        let line_len = self.buffer.line_len(self.cursor.line);
-        self.buffer.insert_newline(self.cursor.line, line_len);
+        let line = self.cursor.line;
+        let line_len = self.current_buffer().line_len(line);
+        self.current_buffer_mut().insert_newline(line, line_len);
         self.cursor.line += 1;
         self.cursor.col = 0;
         self.adjust_viewport();
@@ -339,7 +396,8 @@ impl Editor {
 
     /// Open a new line above current line and enter insert mode (vim O)
     pub fn open_line_above(&mut self) {
-        self.buffer.insert_newline(self.cursor.line, 0);
+        let line = self.cursor.line;
+        self.current_buffer_mut().insert_newline(line, 0);
         self.cursor.col = 0;
         self.adjust_viewport();
         self.mode = Mode::Insert;
@@ -371,7 +429,7 @@ impl Editor {
             self.set_status("No pattern");
             return false;
         }
-        if let Some((line, col)) = self.buffer.find_forward(
+        if let Some((line, col)) = self.current_buffer().find_forward(
             self.cursor.line,
             self.cursor.col,
             self.command_buffer.as_str(),
@@ -396,7 +454,7 @@ impl Editor {
             self.set_status("No pattern");
             return false;
         }
-        if let Some((line, col)) = self.buffer.find_backward(
+        if let Some((line, col)) = self.current_buffer().find_backward(
             self.cursor.line,
             self.cursor.col,
             self.command_buffer.as_str(),
@@ -424,7 +482,7 @@ impl Editor {
             }
         };
         if let Some((line, col)) =
-            self.buffer.find_forward(self.cursor.line, self.cursor.col, pattern, true)
+            self.current_buffer().find_forward(self.cursor.line, self.cursor.col, pattern, true)
         {
             self.cursor.line = line;
             self.cursor.col = col;
@@ -447,7 +505,7 @@ impl Editor {
             }
         };
         if let Some((line, col)) =
-            self.buffer.find_backward(self.cursor.line, self.cursor.col, pattern, true)
+            self.current_buffer().find_backward(self.cursor.line, self.cursor.col, pattern, true)
         {
             self.cursor.line = line;
             self.cursor.col = col;
@@ -462,13 +520,15 @@ impl Editor {
 
     /// Insert a character at the cursor position
     pub fn insert_char(&mut self, ch: char) {
-        self.buffer.insert_char(self.cursor.line, self.cursor.col, ch);
+        let (line, col) = (self.cursor.line, self.cursor.col);
+        self.current_buffer_mut().insert_char(line, col, ch);
         self.cursor.col += 1;
     }
 
     /// Insert a newline at cursor position
     pub fn insert_newline(&mut self) {
-        self.buffer.insert_newline(self.cursor.line, self.cursor.col);
+        let (line, col) = (self.cursor.line, self.cursor.col);
+        self.current_buffer_mut().insert_newline(line, col);
         self.cursor.line += 1;
         self.cursor.col = 0;
         self.adjust_viewport();
@@ -476,53 +536,57 @@ impl Editor {
 
     /// Delete character at cursor (like 'x' in vim)
     pub fn delete_char_at_cursor(&mut self) {
-        self.buffer.delete_char(self.cursor.line, self.cursor.col);
+        let (line, col) = (self.cursor.line, self.cursor.col);
+        self.current_buffer_mut().delete_char(line, col);
         self.clamp_cursor_col();
     }
 
     /// Replace character at cursor with ch; stay in normal mode (vim r)
     pub fn replace_char_at_cursor(&mut self, ch: char) {
-        if self.cursor.col < self.buffer.line_len(self.cursor.line) {
-            self.buffer.delete_char(self.cursor.line, self.cursor.col);
-            self.buffer.insert_char(self.cursor.line, self.cursor.col, ch);
+        let (line, col) = (self.cursor.line, self.cursor.col);
+        if col < self.current_buffer().line_len(line) {
+            self.current_buffer_mut().delete_char(line, col);
+            self.current_buffer_mut().insert_char(line, col, ch);
         }
         self.clamp_cursor_col();
     }
 
     /// Delete from cursor to end of line (vim D)
     pub fn delete_to_end_of_line(&mut self) {
-        while self.cursor.col < self.buffer.line_len(self.cursor.line) {
-            self.buffer.delete_char(self.cursor.line, self.cursor.col);
+        while self.cursor.col < self.current_buffer().line_len(self.cursor.line) {
+            let (line, col) = (self.cursor.line, self.cursor.col);
+            self.current_buffer_mut().delete_char(line, col);
         }
         self.clamp_cursor_col();
     }
 
     /// Join current line with next (vim J); cursor on the space between
     pub fn join_lines(&mut self) {
-        let line_count = self.buffer.line_count();
+        let line_count = self.current_buffer().line_count();
         if self.cursor.line + 1 >= line_count {
             return;
         }
-        let line_len = self.buffer.line_len(self.cursor.line);
-        self.buffer.insert_char(self.cursor.line, line_len, ' ');
-        self.buffer.delete_char(self.cursor.line, line_len + 1);
+        let line = self.cursor.line;
+        let line_len = self.current_buffer().line_len(line);
+        self.current_buffer_mut().insert_char(line, line_len, ' ');
+        self.current_buffer_mut().delete_char(line, line_len + 1);
         self.cursor.col = line_len;
         self.clamp_cursor_col();
     }
 
     /// Delete current line (vim dd); cursor to start of next line or previous if last
     pub fn delete_current_line(&mut self) {
-        let line_count = self.buffer.line_count();
+        let line_count = self.current_buffer().line_count();
         if line_count == 0 {
             return;
         }
         let line = self.cursor.line;
         let was_last_line = line == line_count - 1;
-        while self.buffer.line_len(line) > 0 {
-            self.buffer.delete_char(line, 0);
+        while self.current_buffer().line_len(line) > 0 {
+            self.current_buffer_mut().delete_char(line, 0);
         }
         if line < line_count - 1 {
-            self.buffer.delete_char(line, 0);
+            self.current_buffer_mut().delete_char(line, 0);
         }
         if was_last_line && line > 0 {
             self.cursor.line = line - 1;
@@ -534,8 +598,9 @@ impl Editor {
 
     /// Delete character before cursor (backspace)
     pub fn backspace(&mut self) {
+        let (line, col) = (self.cursor.line, self.cursor.col);
         if let Some((new_line, new_col)) =
-            self.buffer.delete_char_before(self.cursor.line, self.cursor.col)
+            self.current_buffer_mut().delete_char_before(line, col)
         {
             self.cursor.line = new_line;
             self.cursor.col = new_col;
@@ -554,8 +619,8 @@ impl Editor {
 
     /// Save the current buffer
     pub fn save(&mut self) -> Result<(), std::io::Error> {
-        self.buffer.save()?;
-        if let Some(name) = self.buffer.filename() {
+        self.current_buffer_mut().save()?;
+        if let Some(name) = self.current_buffer().filename() {
             self.set_status(&format!("\"{}\" written", name));
         } else {
             self.set_status("File saved");
@@ -565,10 +630,18 @@ impl Editor {
 
     /// Execute a command from the command buffer
     pub fn execute_command(&mut self) -> Option<EditorCommand> {
-        let cmd = self.command_buffer.trim();
-        let result = match cmd {
+        let cmd = self.command_buffer.trim().to_string();
+        let result = match cmd.as_str() {
             "q" | "quit" => Some(EditorCommand::Quit),
             "q!" | "quit!" => Some(EditorCommand::ForceQuit),
+            "bn" | "bnext" => {
+                self.next_buf();
+                None
+            }
+            "bp" | "bprev" | "bprevious" => {
+                self.prev_buf();
+                None
+            }
             "w" | "write" => {
                 match self.save() {
                     Ok(_) => {}
@@ -589,8 +662,9 @@ impl Editor {
                 // Check for :w <filename>
                 if let Some(filename) = cmd.strip_prefix("w ").or_else(|| cmd.strip_prefix("write "))
                 {
-                    match self.buffer.save_as(filename.trim()) {
-                        Ok(_) => self.set_status(&format!("\"{}\" written", filename.trim())),
+                    let path = filename.trim().to_string();
+                    match self.current_buffer_mut().save_as(&path) {
+                        Ok(_) => self.set_status(&format!("\"{}\" written", path)),
                         Err(e) => self.set_status(&format!("Error saving: {}", e)),
                     }
                     None

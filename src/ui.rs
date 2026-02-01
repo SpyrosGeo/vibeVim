@@ -2,19 +2,54 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
+use crate::app::App;
 use crate::editor::Editor;
 use crate::mode::Mode;
 
 /// The width reserved for line numbers
 const LINE_NUMBER_WIDTH: u16 = 6;
+/// Width of the file explorer sidebar when visible
+const SIDEBAR_WIDTH: u16 = 24;
 
-/// Render the editor UI
-pub fn render(frame: &mut Frame, editor: &mut Editor) {
+/// Render the editor UI (with optional file explorer sidebar)
+pub fn render(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
+    let show_sidebar = app.sidebar_visible && app.directory_state.is_some();
+
+    let main_rect = if show_sidebar {
+        let horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(SIDEBAR_WIDTH),
+                Constraint::Min(1),
+            ])
+            .split(size);
+        let sidebar_area = horizontal[0];
+        if let Some(ref dir) = app.directory_state {
+            let widget = dir.file_explorer().widget();
+            let border_style = if app.focus_on_explorer {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default()
+            };
+            let block = Block::default()
+                .title(" Files ")
+                .borders(Borders::ALL)
+                .border_style(border_style);
+            let inner = block.inner(sidebar_area);
+            frame.render_widget(&block, sidebar_area);
+            frame.render_widget(&widget, inner);
+        }
+        horizontal[1]
+    } else {
+        size
+    };
+
+    let editor = &mut app.editor;
 
     // Create the main layout: text area + status bar + command line
     let chunks = Layout::default()
@@ -24,7 +59,7 @@ pub fn render(frame: &mut Frame, editor: &mut Editor) {
             Constraint::Length(1), // Status bar
             Constraint::Length(1), // Command line
         ])
-        .split(size);
+        .split(main_rect);
 
     // Render the text area (line numbers + content)
     render_text_area(frame, editor, chunks[0]);
@@ -36,7 +71,7 @@ pub fn render(frame: &mut Frame, editor: &mut Editor) {
     render_command_line(frame, editor, chunks[2]);
 
     // Position the cursor
-    position_cursor(frame, editor, chunks[0]);
+    position_cursor(frame, editor, chunks[0], main_rect);
 }
 
 /// Render the main text editing area with line numbers
@@ -58,7 +93,7 @@ fn render_text_area(frame: &mut Frame, editor: &mut Editor, area: Rect) {
     editor.adjust_viewport_with_height(visible_height);
 
     let start_line = editor.viewport_offset;
-    let end_line = (start_line + visible_height).min(editor.buffer.line_count());
+    let end_line = (start_line + visible_height).min(editor.current_buffer().line_count());
 
     // Render line numbers
     let mut line_number_lines = Vec::new();
@@ -86,7 +121,7 @@ fn render_text_area(frame: &mut Frame, editor: &mut Editor, area: Rect) {
     // Render text content
     let mut content_lines = Vec::new();
     for line_idx in start_line..end_line {
-        if let Some(line) = editor.buffer.line(line_idx) {
+        if let Some(line) = editor.current_buffer().line(line_idx) {
             let line_str: String = line.chars().filter(|c| *c != '\n').collect();
             content_lines.push(Line::from(line_str));
         }
@@ -111,16 +146,23 @@ fn render_status_bar(frame: &mut Frame, editor: &Editor, area: Rect) {
     };
 
     let filename = editor
-        .buffer
+        .current_buffer()
         .filename()
         .unwrap_or_else(|| "[No Name]".to_string());
 
-    let modified = if editor.buffer.modified { "[+]" } else { "" };
+    let modified = if editor.current_buffer().modified { "[+]" } else { "" };
+
+    let buf_info = if editor.buffers.len() > 1 {
+        format!(" ({}/{})", editor.current_buf + 1, editor.buffers.len())
+    } else {
+        String::new()
+    };
 
     let position = format!(
-        "{}:{} ",
+        "{}:{}{} ",
         editor.cursor.line + 1,
-        editor.cursor.col + 1
+        editor.cursor.col + 1,
+        buf_info
     );
 
     // Calculate available space
@@ -163,18 +205,18 @@ fn render_command_line(frame: &mut Frame, editor: &Editor, area: Rect) {
 }
 
 /// Position the cursor in the frame
-fn position_cursor(frame: &mut Frame, editor: &Editor, text_area: Rect) {
+fn position_cursor(frame: &mut Frame, editor: &Editor, text_area: Rect, main_rect: Rect) {
     // In command or search mode, cursor is in the command line
     if editor.mode == Mode::Command || editor.mode == Mode::Search {
         let prefix_len = 1; // ':' or '/'
-        let x = prefix_len + editor.command_buffer.len() as u16;
-        let y = frame.area().height - 1; // Last line
+        let x = main_rect.x + prefix_len + editor.command_buffer.len() as u16;
+        let y = main_rect.y + main_rect.height - 1;
         frame.set_cursor_position((x, y));
         return;
     }
 
     // Calculate cursor position in text area
-    let content_x = LINE_NUMBER_WIDTH;
+    let content_x = main_rect.x + LINE_NUMBER_WIDTH;
     let visible_line = editor.cursor.line.saturating_sub(editor.viewport_offset);
 
     let x = content_x + editor.cursor.col as u16;
